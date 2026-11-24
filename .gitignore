@@ -1,0 +1,7 @@
+build/
+bin/
+dist/
+output/
+installer/
+*.class
+*.exe
