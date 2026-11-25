@@ -1,0 +1,293 @@
+diff --git a/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java b/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java
+--- a/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java
++++ b/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java
+@@ -246,2 +246,4 @@
+     private JComboBox<String> reportMonthBox;
++    private JComboBox<String> reportDayBox;
++    private JLabel moneyLeftLabel;
+     private boolean fillingReportMonths;
+@@ -587,8 +589,12 @@
+         JLabel hint = new JLabel("  ArrayList (records)  -  HashMap (monthly budget)  -  "
+                 + "Stack (undo)  -  Automatic local file saving");
+         hint.setFont(SMALL_FONT);
+         hint.setForeground(MUTED);
+         hint.setBorder(new EmptyBorder(6, 8, 6, 8));
+-
++        moneyLeftLabel = new JLabel(" ");
++        moneyLeftLabel.setFont(BOLD_FONT);
++        moneyLeftLabel.putClientProperty("keepColor", Boolean.TRUE);
++        moneyLeftLabel.setBorder(new EmptyBorder(6, 8, 6, 12));
+         bar.add(hint, BorderLayout.WEST);
++        bar.add(moneyLeftLabel, BorderLayout.EAST);
+         return bar;
+@@ -981,1 +987,1 @@
+-        goalDeadlineField.setToolTipText("Enter MM/DD/YYYY, for example 05/31/2028.");
++        goalDeadlineField.setToolTipText("Enter MM/DD/YYYY or YYYY-MM-DD. Example: 05/31/2028.");
+@@ -1402,3 +1408,3 @@
+         LocalDate date = validatedExpenseDate();
+-        if (date == null) return;
++        if (date == null || !validateExpenseFunds(date, category, amount, null)) return;
+         Expense expense = new Expense(date, description, category, amount);
+@@ -1450,3 +1456,3 @@
+         LocalDate date = validatedExpenseDate();
+-        if (date == null) return;
++        if (date == null || !validateExpenseFunds(date, category, amount, editingExpense)) return;
+         Expense expense = editingExpense;
+@@ -1499,6 +1505,8 @@
+     private void undoDelete() {
+         if (deleted.isEmpty()) {
+             return;
+         }
+-        Expense expense = deleted.pop();
++        Expense expense = deleted.peek();
++        if (!validateExpenseFunds(expense.date, expense.category, expense.amount, null)) return;
++        deleted.pop();
+         expenses.add(expense);
+@@ -1510,2 +1518,31 @@
++    /** Category plans are warnings; actual available money is the hard limit. */
++    private boolean validateExpenseFunds(LocalDate date, String category, double amount, Expense previous) {
++        YearMonth month = YearMonth.from(date);
++        boolean sameMonth = previous != null && YearMonth.from(previous.date).equals(month);
++        double oldAmount = sameMonth ? previous.amount : 0;
++        double balance = data.balance(month);
++        double after = LedgerData.cents(balance + oldAmount - amount);
++        // Permit corrections that reduce an existing deficit, but never worsen it.
++        if (after < 0 && after < balance) {
++            showError("Not enough money left. Available for this expense: ₱"
++                    + MONEY.format(Math.max(0, balance + oldAmount))
++                    + "\nAdd real income or release savings first.");
++            return false;
++        }
++        double beforeCategory = data.spent(month, category);
++        double oldCategoryAmount = sameMonth && category.equals(previous.category) ? oldAmount : 0;
++        double projected = LedgerData.cents(beforeCategory - oldCategoryAmount + amount);
++        Map<String, Double> monthPlan = data.plans.get(month);
++        Double limit = monthPlan == null ? null : monthPlan.get(category);
++        if (limit != null && projected > limit && projected > beforeCategory) {
++            return JOptionPane.showConfirmDialog(this,
++                    "This expense exceeds your " + category + " plan by ₱" + MONEY.format(projected - limit)
++                    + ".\nMoney left after this expense: ₱" + MONEY.format(after)
++                    + "\nRecord this unexpected expense?", "Category budget warning",
++                    JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) == JOptionPane.YES_OPTION;
++        }
++        return true;
++    }
++
+     /** Show the month of the saved record, even if it differs from today's month. */
+     private void revealExpenseMonth(LocalDate date) {
+@@ -1672,1 +1709,1 @@
+-            showError("Enter a valid deadline as MM/DD/YYYY (today or later).");
++            showError("Enter a valid deadline as MM/DD/YYYY or YYYY-MM-DD (today or later).");
+@@ -1724,1 +1761,1 @@
+-            showError("Enter a valid deadline as MM/DD/YYYY (today or later).");
++            showError("Enter a valid deadline as MM/DD/YYYY or YYYY-MM-DD (today or later).");
+@@ -1887,2 +1924,4 @@
++        YearMonth month = YearMonth.now();
++        if (!validateFundingChange(month, value - data.allowance(month))) return;
+-        data.allowances.put(YearMonth.now(), value);
++        data.allowances.put(month, value);
+-        dashboardMonth = YearMonth.now();
++        dashboardMonth = month;
+@@ -1943,4 +1982,5 @@
+                 MoneyEntry edited = incomeForm(entry);
+                 if (edited == null) continue;
++                if (!validateFundingChange(YearMonth.from(entry.date), edited.amount - entry.amount)) continue;
+                 data.incomes.set(row, edited);
+             } else {
+@@ -1951,3 +1991,4 @@
++                if (!validateFundingChange(YearMonth.from(entry.date), -entry.amount)) continue;
+                 data.incomes.remove(row);
+             }
+             dashboardMonth = YearMonth.from(entry.date);
+@@ -1964,2 +2005,3 @@
++        if (!validateFundingChange(month, -data.allowance(month))) return;
+         data.allowances.remove(month);
+         allowanceField.setText("0.00");
+@@ -1982,46 +2024,27 @@
+-    private void enforceBudgetCap() {
++    /** Do not silently reduce or delete the user's saved budget plans. */
++    private boolean validateFundingChange(YearMonth month, double change) {
++        change = LedgerData.cents(change);
++        if (change >= 0) return true;
++        double newBalance = LedgerData.cents(data.balance(month) + change);
++        double newBudget = LedgerData.cents(data.allowance(month) + data.extraIncome(month) + change);
++        double plannedTotal = 0;
++        Map<String, Double> monthPlan = data.plans.get(month);
++        if (monthPlan != null) for (double amount : monthPlan.values()) plannedTotal += amount;
++        if (newBalance < 0 || LedgerData.cents(plannedTotal) > newBudget) {
++            showError("This change would leave insufficient funds or exceed your budget plan.\n"
++                    + "Money left after change: ₱" + MONEY.format(newBalance)
++                    + "\nTotal monthly budget after change: ₱" + MONEY.format(newBudget)
++                    + "\nTotal planned: ₱" + MONEY.format(plannedTotal)
++                    + "\nReview the budget plan and existing records first.");
++            return false;
++        }
++        return true;
++    }
++
++    private void refreshMoneyLeft() {
++        if (moneyLeftLabel == null) return;
+         YearMonth month = YearMonth.now();
++        double balance = data.balance(month);
++        moneyLeftLabel.setText("Money left (" + month.format(MONTH_FORMAT) + "): ₱" + MONEY.format(balance));
++        moneyLeftLabel.setForeground(balance < 0 ? RED : GREEN);
+-        double totalBudget = LedgerData.cents(data.allowance(month) + data.extraIncome(month));
+-        HashMap<String, Double> monthPlan = planned();
+-
+-        if (totalBudget <= 0) {
+-            if (!monthPlan.isEmpty()) {
+-                monthPlan.clear();
+-                showError("Not enough remaining budget: total monthly budget is ₱0.00, so existing planned amounts were cleared.");
+-            }
+-            return;
+-        }
+-
+-        double totalPlanned = 0;
+-        for (String category : categories) {
+-            Double val = monthPlan.get(category);
+-            if (val != null && val > 0) {
+-                totalPlanned = LedgerData.cents(totalPlanned + val.doubleValue());
+-            }
+-        }
+-
+-        double excess = LedgerData.cents(totalPlanned - totalBudget);
+-        if (excess <= 0) {
+-            return;
+-        }
+-
+-        double trimmed = excess;
+-        for (int i = categories.size() - 1; i >= 0 && excess > 0; i--) {
+-            String category = categories.get(i);
+-            Double val = monthPlan.get(category);
+-            if (val == null || val <= 0) {
+-                continue;
+-            }
+-            double current = val.doubleValue();
+-            if (current <= excess) {
+-                monthPlan.remove(category);
+-                excess = LedgerData.cents(excess - current);
+-            } else {
+-                monthPlan.put(category, Double.valueOf(LedgerData.cents(current - excess)));
+-                excess = 0;
+-            }
+-        }
+-
+-        showError("Not enough remaining budget: planned amounts were reduced by ₱" + MONEY.format(trimmed)
+-                + " to fit your ₱" + MONEY.format(totalBudget) + " total monthly budget.");
+     }
+@@ -2046,1 +2069,3 @@
++        // Existing over-allocated plans may be reduced without a forced reset.
++        double previous = planned().getOrDefault(category, 0.0);
+-        if (amount > remainingBudget + 0.000001) {
++        if (amount > remainingBudget + 0.000001 && amount >= previous) {
+@@ -2124,4 +2149,4 @@
+         refreshDashboard();
+         rebuildGoalTable();
+-        enforceBudgetCap();
++        refreshMoneyLeft();
+         rebuildPlanTable();
+@@ -2263,3 +2288,7 @@
+         totalBudgetValueLabel.setText("₱" + MONEY.format(totalBudget));
++        double unallocated = LedgerData.cents(totalBudget - totalPlannedExcluding(null));
+-        budgetBreakdownLabel.setText("Allowance: ₱" + MONEY.format(baseAllowance)
++        budgetBreakdownLabel.setText("<html>Allowance: ₱" + MONEY.format(baseAllowance)
+-                + "  +  Extra income: ₱" + MONEY.format(extra));
++                + " + Income: ₱" + MONEY.format(extra)
++                + "<br>Unallocated plan: ₱" + MONEY.format(unallocated)
++                + "<br>Actual money left: ₱" + MONEY.format(data.balance(month)) + "</html>");
++        budgetBreakdownLabel.setForeground(unallocated < 0 ? RED : MUTED);
+@@ -2428,5 +2457,7 @@
+-    /** Strict MM/DD/YYYY input, saved as an unambiguous ISO date. */
++    /** Accept two unambiguous date formats; always persist the ISO date. */
+     static String readDeadline(String text, LocalDate today) {
+         try {
+-            if (!text.matches("[0-9]{2}/[0-9]{2}/[0-9]{4}")) return null;
+-            LocalDate date = LocalDate.parse(text, GOAL_DATE);
++            LocalDate date;
++            if (text.matches("[0-9]{2}/[0-9]{2}/[0-9]{4}")) date = LocalDate.parse(text, GOAL_DATE);
++            else if (text.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}")) date = LocalDate.parse(text);
++            else return null;
+@@ -2664,11 +2695,19 @@
+         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+         toolbar.setOpaque(false);
+         reportMonthBox = new JComboBox<String>();
++        reportDayBox = new JComboBox<String>();
++        reportDayBox.addItem("All days");
++        reportDayBox.addActionListener(e -> { if (!fillingReportMonths) rebuildReports(); });
+         reportMonthBox.addActionListener(e -> {
+-            if (!fillingReportMonths) rebuildReports();
++            if (!fillingReportMonths) {
++                updateReportDays(false);
++                rebuildReports();
++            }
+         });
+-        JButton exportButton = new JButton("Export CSV...");
++        JButton exportButton = new JButton("Export month CSV...");
+         exportButton.addActionListener(e -> exportReport());
+         toolbar.add(smallLabel("REPORT MONTH"));
+         toolbar.add(reportMonthBox);
++        toolbar.add(smallLabel("DAY"));
++        toolbar.add(reportDayBox);
+         toolbar.add(exportButton);
+@@ -2711,3 +2750,20 @@
+         if (reportMonthBox.getSelectedItem() == null) reportMonthBox.setSelectedItem(YearMonth.now().format(MONTH_FORMAT));
+         fillingReportMonths = false;
++        updateReportDays(true);
+     }
++
++    private void updateReportDays(boolean preserveDay) {
++        if (reportDayBox == null) return;
++        int old = preserveDay ? reportDayBox.getSelectedIndex() : 0;
++        fillingReportMonths = true;
++        reportDayBox.removeAllItems();
++        reportDayBox.addItem("All days");
++        for (int day = 1; day <= reportMonth().lengthOfMonth(); day++) reportDayBox.addItem(String.valueOf(day));
++        reportDayBox.setSelectedIndex(Math.max(0, Math.min(old, reportDayBox.getItemCount() - 1)));
++        fillingReportMonths = false;
++    }
++
++    private LocalDate reportDay() {
++        int selected = reportDayBox == null ? 0 : reportDayBox.getSelectedIndex();
++        return selected <= 0 ? null : reportMonth().atDay(selected);
++    }
+@@ -2792,2 +2848,3 @@
+         YearMonth month = reportMonth();
++        LocalDate selectedDay = reportDay();
+-        ArrayList<Slice> byCategory = sortedCategoryTotals(month);
++        ArrayList<Slice> byCategory = sortedCategoryTotals(month, selectedDay);
+@@ -2808,2 +2865,4 @@
+         ArrayList<Slice> byDay = dailyTotals(month);
++        if (selectedDay != null) byDay.removeIf(slice -> !slice.name.equals(selectedDay.format(GOAL_DATE)));
++        double dailyReference = (data.allowance(month) + data.extraIncome(month)) / month.lengthOfMonth();
+         double maxDay = 0;
+@@ -2813,8 +2872,16 @@
++        dailyBarsPanel.add(chartNote("Green: within daily average | Orange: near | Red: over"));
++        dailyBarsPanel.add(chartNote("Daily reference: ₱" + MONEY.format(dailyReference)));
+         for (int i = 0; i < byDay.size(); i++) {
+             Slice slice = byDay.get(i);
++            Color color = slice.amount > dailyReference ? RED : slice.amount > 0 && slice.amount >= dailyReference * 0.8
++                    ? new Color(234, 88, 12) : GREEN;
+             addBar(dailyBarsPanel, slice.name, slice.amount, maxDay,
+-                    slice.amount > 0 ? "\u20b1" + MONEY.format(slice.amount) : "-", ACCENT);
++                    slice.amount > 0 ? "\u20b1" + MONEY.format(slice.amount) : "-", color);
+         }
+ 
+         double total = data.spent(month, null);
++        double selectedTotal = 0;
++        for (Slice slice : byCategory) selectedTotal += slice.amount;
++        reportSummaryLabel.setText("<html>" + (selectedDay == null ? "" : "Selected day " + selectedDay.format(GOAL_DATE)
++                + " | Spent: ₱" + MONEY.format(selectedTotal) + "<br>")
+-        reportSummaryLabel.setText("<html>" + month.format(MONTH_FORMAT) + " | Income: ₱" + MONEY.format(data.allowance(month) + data.extraIncome(month))
++                + "Month " + month.format(MONTH_FORMAT) + " | Income: ₱" + MONEY.format(data.allowance(month) + data.extraIncome(month))
+@@ -2835,4 +2902,9 @@
+-    private ArrayList<Slice> sortedCategoryTotals(YearMonth month) {
++    private ArrayList<Slice> sortedCategoryTotals(YearMonth month, LocalDate selectedDay) {
+         ArrayList<Slice> list = new ArrayList<Slice>();
+         for (int i = 0; i < categories.size(); i++) {
++            double amount = 0;
+-            double amount = data.spent(month, categories.get(i));
++            if (selectedDay == null) amount = data.spent(month, categories.get(i));
++            else for (Expense expense : expenses) {
++                if (expense.date.equals(selectedDay) && expense.category.equals(categories.get(i))) amount += expense.amount;
++            }
++            amount = LedgerData.cents(amount);
