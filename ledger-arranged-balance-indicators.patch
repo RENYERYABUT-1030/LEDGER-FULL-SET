@@ -1,0 +1,118 @@
+diff --git a/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java b/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java
+--- a/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java
++++ b/LEDGER SHIT SHIT/LEDGER_ARRANGED/src/FinancialTracker.java
+@@ -178,2 +178,6 @@
+     private JLabel pageTitleLabel;
+     private JLabel pageSubtitleLabel;
++    private JPanel moduleMoneyCard;
++    private JLabel moduleMoneyValue;
++    private JLabel moduleMoneyTitle;
++    private JLabel moduleMoneyDetails;
+@@ -445,6 +449,11 @@
+         contentArea.add(createDashboardPanel(), "Dashboard");
+         contentArea.add(createExpensesPanel(), "Expenses");
+         contentArea.add(createAllowancePanel(), "Allowance");
+         contentArea.add(createGoalsPanel(), "Savings Goals");
+         contentArea.add(createReportsPanel(), "Reports");
+-        main.add(contentArea, BorderLayout.CENTER);
++        JPanel moduleContent = new JPanel(new BorderLayout(0, 0));
++        moduleContent.setOpaque(false);
++        moduleMoneyCard = createModuleMoneyCard();
++        moduleContent.add(moduleMoneyCard, BorderLayout.NORTH);
++        moduleContent.add(contentArea, BorderLayout.CENTER);
++        main.add(moduleContent, BorderLayout.CENTER);
+@@ -509,3 +518,6 @@
+     private void showPage(String name) {
+         cardLayout.show(contentArea, name);
++        if (moduleMoneyCard != null) {
++            moduleMoneyCard.setVisible(!"Dashboard".equals(name) && !"Allowance".equals(name));
++        }
+         for (JButton btn : navButtons) {
+@@ -584,3 +596,52 @@
++    /** Shared money card for Expenses, Savings Goals and Reports. */
++    private JPanel createModuleMoneyCard() {
++        JPanel outer = new JPanel(new BorderLayout());
++        outer.setOpaque(false);
++        outer.setBorder(new EmptyBorder(12, 12, 0, 12));
++        JPanel card = new JPanel(new BorderLayout(18, 0));
++        card.setBackground(CARD);
++        card.setBorder(new javax.swing.border.CompoundBorder(new LineBorder(BORDER, 1),
++                new EmptyBorder(10, 14, 10, 14)));
++        JPanel left = new JPanel(new BorderLayout(0, 4));
++        left.setOpaque(false);
++        moduleMoneyTitle = smallLabel("ACTUAL MONEY LEFT");
++        moduleMoneyValue = new JLabel("₱0.00");
++        moduleMoneyValue.setFont(BIG_FONT);
++        moduleMoneyValue.putClientProperty("keepColor", Boolean.TRUE);
++        left.add(moduleMoneyTitle, BorderLayout.NORTH);
++        left.add(moduleMoneyValue, BorderLayout.CENTER);
++        moduleMoneyDetails = new JLabel(" ");
++        moduleMoneyDetails.setFont(LABEL_FONT);
++        card.add(left, BorderLayout.WEST);
++        card.add(moduleMoneyDetails, BorderLayout.CENTER);
++        outer.add(card, BorderLayout.CENTER);
++        return outer;
++    }
++
++    private void refreshModuleMoneyCard() {
++        if (moduleMoneyValue == null || pageTitleLabel == null) return;
++        String page = pageTitleLabel.getText();
++        YearMonth month = "Reports".equals(page) ? reportMonth() : YearMonth.now();
++        double funds = LedgerData.cents(data.allowance(month) + data.extraIncome(month));
++        double spent = data.spent(month, null);
++        double savings = data.savings(month);
++        double returned = data.savingsReturned(month);
++        double left = data.balance(month);
++        moduleMoneyTitle.setText("MONEY LEFT (" + month.format(MONTH_FORMAT) + ")");
++        moduleMoneyValue.setText("₱" + MONEY.format(left));
++        moduleMoneyValue.setForeground(left < 0 ? RED : GREEN);
++        String details = "<html>Total funds: ₱" + MONEY.format(funds)
++                + " &nbsp; | &nbsp; Expenses: −₱" + MONEY.format(spent)
++                + "<br>Savings deposits: −₱" + MONEY.format(savings)
++                + " &nbsp; | &nbsp; Savings returned: +₱" + MONEY.format(returned);
++        if ("Savings Goals".equals(page)) {
++            double allSaved = 0;
++            for (Goal goal : goals) allSaved += goal.saved;
++            details += "<br><b>Total saved across active goals: ₱" + MONEY.format(allSaved) + "</b>";
++        }
++        moduleMoneyDetails.setText(details + "</html>");
++    }
++
+     private JPanel createStatusBar() {
+         JPanel bar = new JPanel(new BorderLayout());
+         bar.setBackground(CARD);
+@@ -1270,2 +1331,2 @@
+-        JLabel title = smallLabel("TOTAL MONTHLY BUDGET");
++        JLabel title = smallLabel("ACTUAL MONEY LEFT");
+         title.setAlignmentX(JLabel.LEFT_ALIGNMENT);
+@@ -2048,3 +2109,4 @@
+         moneyLeftLabel.setText("Money left (" + month.format(MONTH_FORMAT) + "): ₱" + MONEY.format(balance));
+         moneyLeftLabel.setForeground(balance < 0 ? RED : GREEN);
++        refreshModuleMoneyCard();
+     }
+@@ -2288,7 +2350,13 @@
+-        totalBudgetValueLabel.setText("₱" + MONEY.format(totalBudget));
+-        double unallocated = LedgerData.cents(totalBudget - totalPlannedExcluding(null));
+-        budgetBreakdownLabel.setText("<html>Allowance: ₱" + MONEY.format(baseAllowance)
+-                + " + Income: ₱" + MONEY.format(extra)
+-                + "<br>Unallocated plan: ₱" + MONEY.format(unallocated)
+-                + "<br>Actual money left: ₱" + MONEY.format(data.balance(month)) + "</html>");
++        double balance = data.balance(month);
++        totalBudgetValueLabel.setText("₱" + MONEY.format(balance));
++        totalBudgetValueLabel.setForeground(balance < 0 ? RED : GREEN);
++        double allocated = totalPlannedExcluding(null);
++        double unallocated = LedgerData.cents(totalBudget - allocated);
++        budgetBreakdownLabel.setText("<html>Total monthly funds: ₱" + MONEY.format(totalBudget)
++                + "<br>Allowance: ₱" + MONEY.format(baseAllowance) + " + Income: ₱" + MONEY.format(extra)
++                + "<br>Expenses: −₱" + MONEY.format(data.spent(month, null))
++                + " | Savings: −₱" + MONEY.format(data.savings(month))
++                + "<br>Savings returned: +₱" + MONEY.format(data.savingsReturned(month))
++                + "<br>Allocated plan: ₱" + MONEY.format(allocated)
++                + "<br>Unallocated plan: ₱" + MONEY.format(unallocated) + "</html>");
+         budgetBreakdownLabel.setForeground(unallocated < 0 ? RED : MUTED);
+@@ -2893,4 +2961,5 @@
++        refreshModuleMoneyCard();
+         categoryBarsPanel.revalidate();
+         categoryBarsPanel.repaint();
+         dailyBarsPanel.revalidate();
+         dailyBarsPanel.repaint();
